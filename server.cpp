@@ -21,7 +21,7 @@ struct ClientInfo{
 
 /******username -> ClientInfo******/
 map<string, ClientInfo> clients;
-pthread_mutex_t clients_mutex = PTHREADS_MUTEX_INITIALIZER;
+pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 void* clientHandler(void* clientSocket){
     int socket_fd = *(int*)clientSocket;
@@ -58,7 +58,7 @@ void* clientHandler(void* clientSocket){
 
     while(true){
         memset(buffer, 0, sizeof(buffer));
-        bytesReceived = recv(soclet_fd, buffer, sizeof(buffer) - 1, 0);
+        byteReceived = recv(socket_fd, buffer, sizeof(buffer) - 1, 0);
         if(byteReceived <= 0){
             break;
         }
@@ -136,7 +136,7 @@ int main(){
                 
         /******accept******/
         sockaddr_in clientAddress{};
-        socklent_t clientSize = sizeof(clientAddress);
+        socklen_t clientSize = sizeof(clientAddress);
         int clientSocket = accept(serverSocket, (struct sockaddr*)&clientAddress, &clientSize);
         if(clientSocket < 0){
             perror("Accept failed");
