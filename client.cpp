@@ -40,7 +40,7 @@ int main(){
     sockaddr_in serverAddress{};
     serverAddress.sin_family = AF_INET;
     serverAddress.sin_port = htons(8080);
-    serverAddress.sin_addr.s_addr = inet_pton("127.0.0.1");
+    serverAddress.sin_addr.s_addr = inet_pton(AF_INET, "127.0.0.1", &serverAddress.sin_addr);
 
     // sending connection request
     if(connect(clientSocket, (struct sockaddr*)&serverAddress, sizeof(serverAddress) < 0)){
