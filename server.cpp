@@ -15,6 +15,8 @@ using namespace std;
 
 const int MAX_CLIENTS = 5;
 
+/**client information structure**/
+
 struct ClientInfo{
     string username;
     int socket_fd;
@@ -37,24 +39,30 @@ struct ClientInfo{
             address = other.address;
             is_online = other.is_online;
         }
-    return *this;
+        return *this;
     }
 };
+
+/**whiteboard unit to store in the vector**/
 
 struct whiteboardUnit{
     string sender;
     string receiver;
     string message;
-    time_t timestamp;
+    time_t timestamp;//the sending time
 };
 
-/******username -> ClientInfo******/
+/******username -> ClientInfo map******/
 map<string, ClientInfo> clients;
 
+/**whiteboard vector**/
 vector<whiteboardUnit> whiteboard;
+
+/**pthread of clients and whiteboard**/
 pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t whiteboard_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+/**transform time t to [yyyy month dd, hh mm ss] as a string**/
 string getFormattedTimestamp(time_t t) {
     char buffer[80];
     struct tm* timeinfo = localtime(&t);
@@ -62,53 +70,50 @@ string getFormattedTimestamp(time_t t) {
     return string(buffer);
 }
 
-void printWhiteboard() {
-//cout << "DEBUG: Trying to lock whiteboard_mutex in addWhiteboardEntry()" << endl;
-    
-    if (pthread_mutex_trylock(&whiteboard_mutex) != 0) {
-        //cout << "DEBUG: Mutex already locked! Possible deadlock!" << endl;
-    } else {
-        //cout << "DEBUG: Successfully locked whiteboard_mutex in addWhiteboardList()" << endl;
+/**to print all the whiteboard**/
+void printWhiteboard(){
+    if(pthread_mutex_trylock(&whiteboard_mutex) != 0){//檢查是否遇到deadlock
+        //cout << "DEBUG: mutex locked, deadlock" << endl;
+    }else{
+        //cout << "DEBUG: locked whiteboard_mutex in addWhiteboardList()" << endl;
         pthread_mutex_unlock(&whiteboard_mutex);
     }
-
-
     pthread_mutex_lock(&whiteboard_mutex);
 	//cout << "DEBUG: Entering printWhiteboard()" << endl;
-
-    //cout << "\n--- Whiteboard---\n";
-    for (const auto& entry : whiteboard) {
+    for(const auto& entry : whiteboard){
         cout << "$ chat " << entry.receiver 
-             << " \"" << entry.message << "\"\n";
+            << " \"" << entry.message << "\"\n";
         cout << "[" << getFormattedTimestamp(entry.timestamp) 
-             << "] " << entry.sender << " is using the whiteboard.\n";
-		cout << "<To " << entry.receiver << "> " << entry.message << "\n"; 
+            << "] " << entry.sender << " is using the whiteboard.\n";
+	    cout << "<To " << entry.receiver << "> " << entry.message << "\n"; 
     }
-    //cout << "-------------------------\n";
     pthread_mutex_unlock(&whiteboard_mutex);
 }
 
-void addWhiteboardList(const string& sender, const string& receiver, const string& message) {
+/**to add entries in the whiteboard list**/
+void addWhiteboardList(const string& sender, const string& receiver, const string& message){
     pthread_mutex_lock(&whiteboard_mutex);
-
-	/*cout << "DEBUG: Adding whiteboard entry" << endl;
+	/*
+    cout << "DEBUG: adding whiteboard entry" << endl;
     cout << "Sender: " << sender << endl;
     cout << "Receiver: " << receiver << endl;
     cout << "Message: " << message << endl;
 	*/
-	try {
+    try{
         whiteboardUnit entry{sender, receiver, message, time(nullptr)};
         whiteboard.push_back(entry);
-//cout << "calling printWhileboard()\n";
-		pthread_mutex_unlock(&whiteboard_mutex);
+        //cout << "calling printWhileboard()\n";
+        pthread_mutex_unlock(&whiteboard_mutex);
         printWhiteboard(); 
-//cout << "printWhileboard()\n";
-    } catch (const std::exception& e) {
-        cerr << "Error adding whiteboard entry: " << e.what() << endl;
-	pthread_mutex_unlock(&whiteboard_mutex);
+        //cout << "printWhileboard()\n";
+    }catch(const std::exception& e){
+        cerr << "Error while adding whiteboard entries: " << endl;
+        pthread_mutex_unlock(&whiteboard_mutex);
     }
 }
 
+
+/**warning when someone is trying to send message to someone was online but now is off-line**/
 void systemMessage(const string& message, int sender_fd){
 	pthread_mutex_lock(&clients_mutex);
     for(auto& pair: clients){
@@ -119,6 +124,7 @@ void systemMessage(const string& message, int sender_fd){
     pthread_mutex_unlock(&clients_mutex);
 }
 
+/**handle input strings**/
 void* clientHandler(void* clientSocket){
     int socket_fd = *(int*)clientSocket;
     delete (int*)clientSocket;
@@ -128,9 +134,9 @@ void* clientHandler(void* clientSocket){
     int byteReceived = recv(socket_fd, buffer, sizeof(buffer) - 1, 0);
 
     if(byteReceived <= 0){
-        if (byteReceived == 0) {
+        if(byteReceived == 0){
             cout << "Client disconnected normally.\n";
-        } else {
+        }else{
             perror("recv failed");
         }
         close(socket_fd);
@@ -146,10 +152,11 @@ void* clientHandler(void* clientSocket){
         return nullptr;
     }
 
+    /**split the string into command and username parts**/
     string command = receivedMessage.substr(0, pos);
     string username = receivedMessage.substr(pos + 1);
 
-    if(command != "connect"){
+    if(command != "connect"){//the connect command
 		cout << "Invalid command: " << command << "\n";
         close(socket_fd);
         return nullptr;
@@ -166,6 +173,7 @@ void* clientHandler(void* clientSocket){
     inet_ntop(AF_INET, &clientAddress.sin_addr, clientIP, INET_ADDRSTRLEN);
     int clientPort = ntohs(clientAddress.sin_port);
 
+    /**announce when somebody else is online**/
     stringstream onlineMsg;
     onlineMsg << "<User " << username << " is on-line, socket address: " << clientIP << "/" << clientPort << ".>";
 
@@ -188,7 +196,7 @@ void* clientHandler(void* clientSocket){
         }
 
         string msg(buffer);
-        if(msg == "bye"){
+        if(msg == "bye"){//quit the connection
             stringstream offlineMsg;
             offlineMsg << "<User " << username << " is off-line.>\n";
 
@@ -199,34 +207,34 @@ void* clientHandler(void* clientSocket){
         }
         
         pos = msg.find(" ");
-        if(pos != string::npos && msg.substr(0, pos) == "chat"){
-            size_t pos2 = msg.find(" ", pos + 1);
+        if(pos != string::npos && msg.substr(0, pos) == "chat"){//the chat command
+            size_t pos2 = msg.find(" ", pos + 1);//the message
             if(pos2 != string::npos){
                 string targetUser = msg.substr(pos + 1, pos2 - pos - 1);
                 string message = msg.substr(pos2 + 1);
 
-				 message.erase(0, message.find_first_not_of(" \""));
+				message.erase(0, message.find_first_not_of(" \""));//handle redundant endline
                 message.erase(message.find_last_not_of(" \"\n") + 1);
 
                 pthread_mutex_lock(&clients_mutex);
 				auto it = clients.find(targetUser);
                 if(it != clients.end()){
                     if(it->second.is_online){
-                        // User is online, send message
+                        //target user is online, send the message
                         int targetSocket = it->second.socket_fd;
                         string fullMessage = "<From " + username + "> " + message;
                         send(targetSocket, fullMessage.c_str(), fullMessage.length(), 0);
 						addWhiteboardList(username, targetUser, message);
                     }else{
-                        // User is offline
+                        //target user is offline
                         string offlineMsg = "<User " + targetUser + " is off-line.>";
                         send(socket_fd, offlineMsg.c_str(), offlineMsg.length(), 0);
-			addWhiteboardList(username, targetUser, message);
+            			addWhiteboardList(username, targetUser, message);
                     }
-                }else{
+                }else{//user trying to send to someone not connected ever
                     string errorMsg = "<User " + targetUser + " does not exist.>";
                     send(socket_fd, errorMsg.c_str(), errorMsg.length(), 0);
-					//cout << "DEBUG: Calling addWhiteboardEntry()" << endl;
+					//cout << "DEBUG: calling addWhiteboardEntry()" << endl;
 					addWhiteboardList(username, targetUser, message);
                 }
                 pthread_mutex_unlock(&clients_mutex);
