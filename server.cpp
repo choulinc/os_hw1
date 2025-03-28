@@ -4,19 +4,19 @@
 #include <cstring>
 #include <sys/socket.h>
 #include <netinet/in.h>
-#include <arpa/inet.h>
 #include <pthread.h>
 #include <unistd.h>
 #include <vector>
 #include <map>
-#include <set>
-#include <sstream>
-#include <iomanip>
-#include <ctime>
 
 using namespace std;
 
 const int MAX_CLIENTS = 5;
+
+struct ClientInfo{
+   string username;
+   int socket_fd;
+};
 
 struct WhiteboardEntry {
     string sender;
@@ -24,35 +24,6 @@ struct WhiteboardEntry {
     string message;
     time_t timestamp;
 };
-
-struct ClientInfo{
-   string username;
-   int socket_fd;
-   sockaddr_in address;
-   bool is_online;
-
-   ClientInfo() : username(""), socket_fd(-1), address{}, is_online(false) {}
-
-   // Parameterized constructor
-   ClientInfo(const string& user, int fd, const sockaddr_in& addr) 
-       : username(user), socket_fd(fd), address(addr), is_online(true) {}
-
-   // Copy constructor
-   ClientInfo(const ClientInfo& other) 
-       : username(other.username), socket_fd(other.socket_fd), address(other.address), is_online(other.is_online) {}
-
-   // Assignment operator
-   ClientInfo& operator=(const ClientInfo& other) {
-       if (this != &other) {
-           username = other.username;
-           socket_fd = other.socket_fd;
-           address = other.address;
-           is_online = other.is_online;
-       }
-       return *this;
-   }
-};
-
 
 /******username -> ClientInfo******/
 map<string, ClientInfo> clients;
@@ -71,33 +42,34 @@ void printWhiteboard() {
     pthread_mutex_lock(&whiteboard_mutex);
     cout << "\n--- Whiteboard Contents ---\n";
     for (const auto& entry : whiteboard) {
-        cout << "Whiteboard " << entry.sender << ":\n";
-        cout << "$ chat " << entry.receiver << " \"" << entry.message << "\"\n";
-        cout << "[" << getFormattedTimestamp(entry.timestamp) << "] "
-             << entry.sender << " is using the whiteboard.\n";
-        cout << entry.message << "\n\n";
+        cout << "$ chat " << entry.receiver 
+             << " \"" << entry.message << "\"\n";
+        cout << "[" << getFormattedTimestamp(entry.timestamp) 
+             << "] " << entry.sender << " is using the whiteboard.\n";
+        cout << "Message: " << entry.message << "\n\n";
     }
     cout << "-------------------------\n";
     pthread_mutex_unlock(&whiteboard_mutex);
 }
 
-// Add entry to whiteboard
 void addWhiteboardEntry(const string& sender, const string& receiver, const string& message) {
     pthread_mutex_lock(&whiteboard_mutex);
-    WhiteboardEntry entry{sender, receiver, message, time(nullptr)};
-    whiteboard.push_back(entry);
-    printWhiteboard(); // Log whiteboard contents
-    pthread_mutex_unlock(&whiteboard_mutex);
-}
 
-void systemMessage(const string& message, int sender_fd){
-	pthread_mutex_lock(&clients_mutex);
-    for(auto& pair: clients){
-        if(pair.second.socket_fd != sender_fd && pair.second.is_online){
-            send(pair.second.socket_fd, message.c_str(), message.length(), 0);
-        }
+	cout << "DEBUG: Adding whiteboard entry" << endl;
+    cout << "Sender: " << sender << endl;
+    cout << "Receiver: " << receiver << endl;
+    cout << "Message: " << message << endl;
+
+	try {
+        WhiteboardEntry entry{sender, receiver, message, time(nullptr)};
+        whiteboard.push_back(entry);
+        printWhiteboard(); 
+    } catch (const std::exception& e) {
+        cerr << "Error adding whiteboard entry: " << e.what() << endl;
     }
-    pthread_mutex_unlock(&clients_mutex);
+
+
+    pthread_mutex_unlock(&whiteboard_mutex);
 }
 
 void* clientHandler(void* clientSocket){
@@ -134,25 +106,12 @@ void* clientHandler(void* clientSocket){
         close(socket_fd);
         return nullptr;
     }
-    
-    sockaddr_in clientAddress;
-    socklen_t addressLength = sizeof(clientAddress);
-    getpeername(socket_fd, (struct sockaddr*)&clientAddress, &addressLength);
-
-    char clientIP[INET_ADDRSTRLEN];
-    inet_ntop(AF_INET, &clientAddress.sin_addr, clientIP, INET_ADDRSTRLEN);
-    int clientPort = ntohs(clientAddress.sin_port);
-
-    stringstream onlineMsg;
-    onlineMsg << "<User " << username << " is on-line, socket address: " << clientIP << "/" << clientPort << ".>";
 
     pthread_mutex_lock(&clients_mutex);
-    clients[username] = {username, socket_fd, clientAddress};
+    clients[username] = {username, socket_fd};
     pthread_mutex_unlock(&clients_mutex);
 
-    systemMessage(onlineMsg.str(), socket_fd);
-
-    cout << onlineMsg.str() << endl;
+    cout << "<User " << username << " is online.>\n";
 
     while(true){
         memset(buffer, 0, sizeof(buffer));
@@ -164,12 +123,7 @@ void* clientHandler(void* clientSocket){
 
         string msg(buffer);
         if(msg == "bye"){
-            stringstream offlineMsg;
-            offlineMsg << "<User " << username << " is off-line.>\n";
-
-            systemMessage(offlineMsg.str(), socket_fd);
-
-            cout << offlineMsg.str() << endl;
+            cout << "<User " << username << " is off-line.>\n";
             break;
         }
         
@@ -180,33 +134,30 @@ void* clientHandler(void* clientSocket){
                 string targetUser = msg.substr(pos + 1, pos2 - pos - 1);
                 string message = msg.substr(pos2 + 1);
 
+				 message.erase(0, message.find_first_not_of(" \""));
+                message.erase(message.find_last_not_of(" \"\n") + 1);
+
                 pthread_mutex_lock(&clients_mutex);
-                auto it = clients.find(targetUser);
-                if(it != clients.end()){
-                    if(it->second.is_online){
-                        string senderUsername = "";
-                        for (const auto& client : clients) {
-                            if (client.second.socket_fd == socket_fd) {
-                                senderUsername = client.first;
-                                break;
-                            }
-                        }
+                if(clients.find(targetUser) != clients.end()){
+                    int targetSocket = clients[targetUser].socket_fd;
+					
+					 cout << "DEBUG: Attempting to send message" << endl;
+    cout << "Target Socket: " << targetSocket << endl;
+    cout << "Full Message: [<From " << username << "> " << message << "]" << endl;
 
-                        // Add to whiteboard (synchronized)
-                        addWhiteboardEntry(senderUsername, targetUser, message);
-
-                        // Send message
-                        int targetSocket = it->second.socket_fd;
-                        string fullMessage = "<From " + senderUsername + "> " + message;
-                        send(targetSocket, fullMessage.c_str(), fullMessage.length(), 0);
-                    }else{
-                        // User is offline
-                        string offlineMsg = "<User " + targetUser + " is off-line.>";
-                        send(socket_fd, offlineMsg.c_str(), offlineMsg.length(), 0);
-                    }
+                    string fullMessage = "<From " + username + "> " + message;
+                    ssize_t bytesSent = send(targetSocket, fullMessage.c_str(), fullMessage.length(), 0);
+					
+					if(bytesSent < 0){
+						perror("Send failed");
+						cout << "Error sending message to " << targetUser << endl;
+					}else{
+						cout << "Successfully sent " << bytesSent << " bytes to " << targetUser << endl;
+					}
                 }else{
-                    string errorMsg = "<User " + targetUser + " does not exist.>";
+                    string errorMsg = "<User " + targetUser + "does not exist.>";
                     send(socket_fd, errorMsg.c_str(), errorMsg.length(), 0);
+					addWhiteboardEntry(username, targetUser, message);
                 }
                 pthread_mutex_unlock(&clients_mutex);
             }
@@ -214,11 +165,7 @@ void* clientHandler(void* clientSocket){
     }
 
     pthread_mutex_lock(&clients_mutex);
-    auto it = clients.find(username);
-    if (it != clients.end()) {
-        it->second.is_online = false;
-        it->second.socket_fd = -1;
-    }
+    clients.erase(username);
     pthread_mutex_unlock(&clients_mutex);
 
     close(socket_fd);
