@@ -31,13 +31,20 @@ void* clientHandler(void* clientSocket){
     memset(buffer, 0, sizeof(buffer));
     int byteReceived = recv(socket_fd, buffer, sizeof(buffer) - 1, 0);
     if(byteReceived <= 0){
+        if (byteReceived == 0) {
+            cout << "Client disconnected normally.\n";
+        } else {
+            perror("recv failed");
+        }
         close(socket_fd);
         return nullptr;
     }
+	cout << "Received message: " << buffer << endl; 
 
     string receivedMessage(buffer);
     size_t pos = receivedMessage.find(" ");
     if(pos == string::npos){
+		cout << "Invalid message format\n";
         close(socket_fd);
         return nullptr;
     }
@@ -46,6 +53,7 @@ void* clientHandler(void* clientSocket){
     string username = receivedMessage.substr(pos + 1);
 
     if(command != "connect"){
+		cout << "Invalid command: " << command << "\n";
         close(socket_fd);
         return nullptr;
     }
@@ -54,12 +62,13 @@ void* clientHandler(void* clientSocket){
     clients[username] = {username, socket_fd};
     pthread_mutex_unlock(&clients_mutex);
 
-    cout << "<User " << username << "is online.>\n";
+    cout << "<User " << username << " is online.>\n";
 
     while(true){
         memset(buffer, 0, sizeof(buffer));
         byteReceived = recv(socket_fd, buffer, sizeof(buffer) - 1, 0);
         if(byteReceived <= 0){
+			cout << "Disconnected or error in receiving data.\n";
             break;
         }
 
@@ -111,10 +120,10 @@ int main(){
         exit(EXIT_FAILURE);
     }
 
-    sockaddr_in serverAddress; //store the address
+    sockaddr_in serverAddress{}; //store the address
     serverAddress.sin_family = AF_INET;    
     serverAddress.sin_port = htons(8080); // convert unsigned int from machine byte order to network byte order
-    serverAddress.sin_addr.s_addr = INADDR_ANY; //make it listen to all the available IPs
+    serverAddress.sin_addr.s_addr = htonl(INADDR_ANY); //make it listen to all the available IPs
     
     /******bind******/
 
