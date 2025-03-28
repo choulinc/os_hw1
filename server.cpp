@@ -9,11 +9,21 @@
 #include <unistd.h>
 #include <vector>
 #include <map>
+#include <set>
 #include <sstream>
+#include <iomanip>
+#include <ctime>
 
 using namespace std;
 
 const int MAX_CLIENTS = 5;
+
+struct WhiteboardEntry {
+    string sender;
+    string receiver;
+    string message;
+    time_t timestamp;
+};
 
 struct ClientInfo{
    string username;
@@ -46,7 +56,39 @@ struct ClientInfo{
 
 /******username -> ClientInfo******/
 map<string, ClientInfo> clients;
+vector<WhiteboardEntry> whiteboard;
 pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t whiteboard_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+string getFormattedTimestamp(time_t t) {
+    char buffer[80];
+    struct tm* timeinfo = localtime(&t);
+    strftime(buffer, sizeof(buffer), "%Y %B %d, %H:%M:%S", timeinfo);
+    return string(buffer);
+}
+
+void printWhiteboard() {
+    pthread_mutex_lock(&whiteboard_mutex);
+    cout << "\n--- Whiteboard Contents ---\n";
+    for (const auto& entry : whiteboard) {
+        cout << "Whiteboard " << entry.sender << ":\n";
+        cout << "$ chat " << entry.receiver << " \"" << entry.message << "\"\n";
+        cout << "[" << getFormattedTimestamp(entry.timestamp) << "] "
+             << entry.sender << " is using the whiteboard.\n";
+        cout << entry.message << "\n\n";
+    }
+    cout << "-------------------------\n";
+    pthread_mutex_unlock(&whiteboard_mutex);
+}
+
+// Add entry to whiteboard
+void addWhiteboardEntry(const string& sender, const string& receiver, const string& message) {
+    pthread_mutex_lock(&whiteboard_mutex);
+    WhiteboardEntry entry{sender, receiver, message, time(nullptr)};
+    whiteboard.push_back(entry);
+    printWhiteboard(); // Log whiteboard contents
+    pthread_mutex_unlock(&whiteboard_mutex);
+}
 
 void systemMessage(const string& message, int sender_fd){
 	pthread_mutex_lock(&clients_mutex);
@@ -142,9 +184,20 @@ void* clientHandler(void* clientSocket){
                 auto it = clients.find(targetUser);
                 if(it != clients.end()){
                     if(it->second.is_online){
-                        // User is online, send message
+                        string senderUsername = "";
+                        for (const auto& client : clients) {
+                            if (client.second.socket_fd == socket_fd) {
+                                senderUsername = client.first;
+                                break;
+                            }
+                        }
+
+                        // Add to whiteboard (synchronized)
+                        addWhiteboardEntry(senderUsername, targetUser, message);
+
+                        // Send message
                         int targetSocket = it->second.socket_fd;
-                        string fullMessage = "<From " + username + "> " + message;
+                        string fullMessage = "<From " + senderUsername + "> " + message;
                         send(targetSocket, fullMessage.c_str(), fullMessage.length(), 0);
                     }else{
                         // User is offline
